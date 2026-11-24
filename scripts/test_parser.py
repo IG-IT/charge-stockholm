@@ -95,8 +95,8 @@ class RealDataTest(unittest.TestCase):
 
     def test_day_and_night_prices(self):
         day, night = self.stations("2026-11-24T12:00"), self.stations("2026-11-24T03:00")
-        self.assertEqual(day["Solna Centrum"]["price"], 3.95)
-        self.assertEqual(night["Solna Centrum"]["price"], 2.95)
+        self.assertEqual(day["Solna Centrum DC"]["price"], 4.95)
+        self.assertEqual(night["Solna Centrum DC"]["price"], 3.45)
         self.assertEqual(day["Barkarby DC"]["price"], 4.95)
         self.assertEqual(self.stations("2026-11-24T23:30")["Barkarby DC"]["price"], 3.49)
 
@@ -104,7 +104,10 @@ class RealDataTest(unittest.TestCase):
         s = self.stations("2026-11-24T12:00")["Nacka Strand DC"]
         self.assertEqual((s["kind"], s["kw"], s["total"], s["free"]), ("DC", 300, 4, 3))
         self.assertAlmostEqual(s["lat"], 59.3157, places=3)
-        self.assertNotIn("Värmdö Lastbilsladdning", self.stations("2026-11-24T12:00"))
+        names = set(self.stations("2026-11-24T12:00"))
+        self.assertEqual(len(names), 8)
+        for other in ["Solna Centrum", "Flygfyren 50KW DC", "Värmdö Marknad P1-P12", "Värmdö Lastbilsladdning"]:
+            self.assertNotIn(other, names)
 
     def test_empty_input(self):
         self.assertEqual(P.parse({}, {}, at("2026-11-24T12:00")), [])

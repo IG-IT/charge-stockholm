@@ -11,7 +11,6 @@ const state = {
   historyFor: null,           // latest.updated, для которого загружена история
   favorites: new Set(JSON.parse(localStorage.getItem('favorites') || '[]')),
   favOnly: localStorage.getItem('favOnly') === '1',
-  kind: localStorage.getItem('kind') || 'all',
   days: 1,
   position: null,
 };
@@ -106,7 +105,7 @@ function availability(s) {
 
 function visibleStations() {
   return state.latest.stations.filter(s =>
-    (state.kind === 'all' || s.kind === state.kind) && (!state.favOnly || state.favorites.has(s.id)));
+    !state.favOnly || state.favorites.has(s.id));
 }
 
 // ------------------------------------------------------------------ render: list
@@ -317,8 +316,9 @@ function calc() {
     out.append(node('br'), node('span', `⚠ ${feeText(minuteFee)} — не забудьте отключиться вовремя.`, 'meta'));
   }
   if (s.kw) {
-    const minutes = Math.round(kwh / (s.kind === 'AC' ? Math.min(s.kw, 11) : s.kw * 0.6) * 60);
-    out.append(node('br'), node('span', `Примерное время: ~${minutes} мин (${s.kind === 'AC' ? 'бортовое ЗУ 11 кВт' : 'средняя мощность ~60% от пиковой'}).`, 'meta'));
+    const avg = s.kind === 'AC' ? Math.min(s.kw, 11) : Math.min(s.kw, 150) * 0.65;
+    const minutes = Math.round(kwh / avg * 60);
+    out.append(node('br'), node('span', `Примерное время: ~${minutes} мин (${s.kind === 'AC' ? 'бортовое ЗУ 11 кВт' : `в среднем ~${Math.round(avg)} кВт, зависит от машины`}).`, 'meta'));
   }
 }
 
@@ -352,13 +352,6 @@ async function load() {
 }
 
 // ------------------------------------------------------------------ events
-function setKind(kind) {
-  state.kind = kind;
-  localStorage.setItem('kind', kind);
-  document.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('active', b.dataset.kind === kind));
-}
-
-document.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { setKind(b.dataset.kind); render(); });
 document.querySelectorAll('[data-days]').forEach(b => b.onclick = () => {
   state.days = Number(b.dataset.days);
   document.querySelectorAll('[data-days]').forEach(x => x.classList.toggle('active', x === b));
@@ -391,7 +384,6 @@ $('loc').onclick = () => {
 window.addEventListener('online', load);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 
-setKind(state.kind);
 $('favOnly').setAttribute('aria-pressed', state.favOnly);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
 load();

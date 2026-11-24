@@ -32,17 +32,18 @@ TZ = ZoneInfo("Europe/Stockholm")
 API = "https://api.spirii.com/v2/afir/energy-infrastructure-"
 HISTORY_DAYS = 365
 
-# Все сайты Alecta в Spirii называются "Alecta F - <место> [DC|P1-P12|...]".
+# Сайты Alecta в Spirii называются "Alecta F - <название>".
+# Отслеживаем ровно эти восемь DC-станций (точное совпадение названия).
 SITE_PREFIX = "alecta f - "
 LOCATIONS = [
-    "Solna Centrum",
-    "Nacka Strand",
-    "Bredden Öst",
-    "Bredden Väst",
-    "Barkarby",
-    "Värmdö Marknad",
-    "Värmdö Köpcenter",
-    "Flygfyren",
+    "Nacka Strand DC",
+    "Solna Centrum DC",
+    "Bredden Öst DC",
+    "Bredden Väst DC",
+    "Barkarby DC",
+    "Värmdö Marknad DC",
+    "Värmdö Köpcenter DC",
+    "Flygfyren DC",
 ]
 
 KWH_TYPES = {"priceperkwh"}
@@ -239,7 +240,7 @@ def match_location(site_name: str):
     if not n.startswith(SITE_PREFIX):
         return None
     for location in LOCATIONS:
-        if norm(location) in n:
+        if n == SITE_PREFIX + norm(location):
             return location
     return None
 
@@ -299,7 +300,7 @@ def parse(static: dict, dynamic: dict, now: datetime) -> list[dict]:
             "statusKnown": known,
             "statuses": dict(status_counter),
         })
-    stations.sort(key=lambda s: (LOCATIONS.index(s["location"]), s["kind"], s["name"]))
+    stations.sort(key=lambda s: LOCATIONS.index(s["location"]))
     return stations
 
 
