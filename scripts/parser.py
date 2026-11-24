@@ -19,6 +19,7 @@ import math
 import os
 import sys
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -303,6 +304,62 @@ def parse(static: dict, dynamic: dict, now: datetime) -> list[dict]:
     return stations
 
 
+# ---------------------------------------------------------------- recent (7 дней)
+
+RECENT_DAYS = 7
+
+
+def load_previous() -> dict:
+    """Прошлый latest.json: с опубликованного сайта (в CI) или локальный файл.
+
+    Ошибка загрузки не останавливает сбор: просто начинаем неделю заново
+    (у пользователя полная история всё равно хранится на телефоне).
+    """
+    url = os.getenv("PREVIOUS_LATEST_URL")
+    if not url:
+        path = DATA_DIR / "latest.json"
+        try:
+            return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except ValueError:
+            return {}
+    url += ("&" if "?" in url else "?") + f"t={int(datetime.now().timestamp())}"  # мимо кэша CDN Pages
+    request = urllib.request.Request(url, headers={"User-Agent": "ChargeStockholm/1.0", "Cache-Control": "no-cache"})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                print("No previous latest.json published yet — starting fresh")
+                return {}
+            print(f"previous attempt {attempt + 1}: {error}", file=sys.stderr)
+        except Exception as error:
+            print(f"previous attempt {attempt + 1}: {error}", file=sys.stderr)
+    print("WARNING: could not load previous data — recent history restarts")
+    return {}
+
+
+def update_recent(recent: dict | None, stations: list[dict], slot: datetime) -> dict:
+    """Скользящие 7 дней: {"sites":[id...], "rows":[[epoch слота, [цены], [свободно]], ...]}.
+
+    Новые сайты дописываются в конец "sites"; запись того же слота перезаписывается.
+    """
+    if not isinstance(recent, dict) or not isinstance(recent.get("sites"), list) or not isinstance(recent.get("rows"), list):
+        recent = {"sites": [], "rows": []}
+    sites = recent["sites"]
+    for s in stations:
+        if s["id"] not in sites:
+            sites.append(s["id"])
+    by_id = {s["id"]: s for s in stations}
+    t = int(slot.timestamp())
+    cutoff = t - RECENT_DAYS * 86400
+    rows = [r for r in recent["rows"] if isinstance(r, list) and len(r) == 3 and cutoff < r[0] != t]
+    rows.append([t, [by_id[i]["price"] if i in by_id else None for i in sites],
+                 [by_id[i]["free"] if i in by_id else None for i in sites]])
+    rows.sort(key=lambda r: r[0])
+    return {"sites": sites, "rows": rows}
+
+
 # ---------------------------------------------------------------- output
 
 def half_hour_slot(now: datetime) -> datetime:
@@ -335,14 +392,17 @@ def main() -> None:
     if not stations:
         raise RuntimeError("No Alecta sites matched — site naming in Spirii may have changed.")
 
+    slot = half_hour_slot(now)
+    recent = update_recent(load_previous().get("recent"), stations, slot)
     save_json(DATA_DIR / "latest.json", {
         "updated": now.isoformat(),
-        "slot": half_hour_slot(now).isoformat(),
+        "slot": slot.isoformat(),
+        "recent": recent,
         "source": "Spirii AFIR",
         "locations": LOCATIONS,
         "stations": stations,
     })
-    print(f"Saved {len(stations)} stations")
+    print(f"Saved {len(stations)} stations, {len(recent['rows'])} recent slots")
 
 
 if __name__ == "__main__":

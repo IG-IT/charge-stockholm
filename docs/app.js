@@ -291,14 +291,26 @@ function mergeRecords(h, records) {
   return added;
 }
 
-/** Сохраняет текущий снимок, если его ещё нет (снимок меняется раз в 30 минут). */
+/** Вливает в локальную историю последние 7 дней с сервера и текущий снимок (один раз на новый снимок). */
 function recordSnapshot(latest) {
   if (!latest.updated || !latest.stations?.length) return;
+  if (state.history.lastUpdated === latest.updated) return;   // этот снимок уже сохранён
+  const names = Object.fromEntries(latest.stations.map(s => [s.id, s.name]));
+  const records = [];
+  const recent = latest.recent;
+  if (recent && Array.isArray(recent.sites) && Array.isArray(recent.rows)) {
+    for (const [t, prices, free] of recent.rows) {
+      recent.sites.forEach((id, i) => {
+        if (prices?.[i] == null && free?.[i] == null) return;
+        records.push({ t, id, name: names[id], price: prices[i] ?? null, free: free[i] ?? null });
+      });
+    }
+  }
   // Ключ — начало получасового слота (21:00, 21:30…): повторный запуск в том же слоте перезапишет запись.
   const t = Math.floor(Date.parse(latest.slot || latest.updated) / 1000);
-  if (state.history.lastUpdated === latest.updated) return;   // этот снимок уже сохранён
+  for (const s of latest.stations) records.push({ t, id: s.id, name: s.name, price: s.price, free: s.free });
+  mergeRecords(state.history, records);
   state.history.lastUpdated = latest.updated;
-  mergeRecords(state.history, latest.stations.map(s => ({ t, id: s.id, name: s.name, price: s.price, free: s.free })));
   saveHistory(state.history);
 }
 
@@ -426,7 +438,7 @@ function heatmap(series, total) {
 function drawChart(el, points, opt) {
   const data = points.filter(p => p[1] != null);
   el.replaceChildren();
-  if (data.length < 1) { el.append(node('div', 'История пока не накоплена. Она копится на этом устройстве, пока приложение открыто.', 'empty')); return; }
+  if (data.length < 1) { el.append(node('div', 'История пока не накоплена — новые данные появляются каждые 30 минут.', 'empty')); return; }
   const W = 340, H = 140, L = 34, R = 6, T = 8, B = 20;
   const t0 = data[0][0], t1 = data.at(-1)[0];
   let lo = Math.min(...data.map(p => p[1])), hi = Math.max(...data.map(p => p[1]));

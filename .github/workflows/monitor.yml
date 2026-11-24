@@ -34,16 +34,19 @@ jobs:
       - name: Tests
         run: python -m unittest discover -s scripts
 
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      # Прошлые 7 дней берутся из уже опубликованного latest.json.
       - name: Fetch prices
         run: python scripts/parser.py
         env:
+          PREVIOUS_LATEST_URL: ${{ steps.pages.outputs.base_url }}/data/latest.json
           SPIRII_CUSTOMER_IDS: ${{ vars.SPIRII_CUSTOMER_IDS }}
           SPIRII_CPO_ID: ${{ vars.SPIRII_CPO_ID }}
 
-      # На сайт публикуется только текущий снимок docs/data/latest.json.
-      # История копится на телефоне пользователя (localStorage), сервер её не хранит.
-      - uses: actions/configure-pages@v6
-
+      # На сайт публикуется latest.json: текущий снимок + скользящие 7 дней.
+      # Полная история копится только на телефоне (localStorage).
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs

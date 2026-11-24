@@ -113,6 +113,21 @@ class RealDataTest(unittest.TestCase):
         self.assertEqual(P.parse({}, {}, at("2026-11-24T12:00")), [])
 
 
+class RecentTest(unittest.TestCase):
+    def test_append_replace_trim_and_new_sites(self):
+        slot = at("2026-11-24T21:00")
+        t = int(slot.timestamp())
+        old = {"sites": ["a"], "rows": [[t - 8 * 86400, [1], [1]], [t - 1800, [4.0], [2]], [t, [9.9], [0]]]}
+        stations = [{"id": "b", "price": 3.0, "free": 2}, {"id": "a", "price": 4.0, "free": 1}]
+        r = P.update_recent(old, stations, slot)
+        self.assertEqual(r["sites"], ["a", "b"])
+        self.assertEqual(r["rows"], [[t - 1800, [4.0], [2]], [t, [4.0, 3.0], [1, 2]]])
+
+    def test_bad_previous_is_ignored(self):
+        r = P.update_recent("garbage", [{"id": "a", "price": 1.0, "free": 0}], at("2026-11-24T21:00"))
+        self.assertEqual(len(r["rows"]), 1)
+
+
 class SlotTest(unittest.TestCase):
     def test_half_hour_slot(self):
         self.assertEqual(P.half_hour_slot(at("2026-11-24T21:11:42")), at("2026-11-24T21:00"))
