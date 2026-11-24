@@ -113,5 +113,12 @@ class RealDataTest(unittest.TestCase):
         self.assertEqual(P.parse({}, {}, at("2026-11-24T12:00")), [])
 
 
+class SlotTest(unittest.TestCase):
+    def test_half_hour_slot(self):
+        self.assertEqual(P.half_hour_slot(at("2026-11-24T21:11:42")), at("2026-11-24T21:00"))
+        self.assertEqual(P.half_hour_slot(at("2026-11-24T21:44:00")), at("2026-11-24T21:30"))
+        self.assertEqual(P.half_hour_slot(at("2026-11-24T21:30:00")), at("2026-11-24T21:30"))
+
+
 if __name__ == "__main__":
     unittest.main()

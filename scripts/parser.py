@@ -305,6 +305,11 @@ def parse(static: dict, dynamic: dict, now: datetime) -> list[dict]:
 
 # ---------------------------------------------------------------- output
 
+def half_hour_slot(now: datetime) -> datetime:
+    """Начало получасового слота: 21:11 -> 21:00, 21:44 -> 21:30. Ключ записи истории."""
+    return now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
+
+
 def save_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -332,6 +337,7 @@ def main() -> None:
 
     save_json(DATA_DIR / "latest.json", {
         "updated": now.isoformat(),
+        "slot": half_hour_slot(now).isoformat(),
         "source": "Spirii AFIR",
         "locations": LOCATIONS,
         "stations": stations,

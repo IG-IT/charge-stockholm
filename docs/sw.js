@@ -1,7 +1,7 @@
 // Network-first: всегда пробуем свежие данные, при отсутствии сети отдаём кэш.
-const CACHE = 'charge-stockholm-v4';
+const CACHE = 'charge-stockholm-v5';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.json',
-  './icons/icon-192.png', './icons/icon-512.png'];
+  './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

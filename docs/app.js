@@ -286,8 +286,10 @@ function mergeRecords(h, records) {
 /** Сохраняет текущий снимок, если его ещё нет (снимок меняется раз в 30 минут). */
 function recordSnapshot(latest) {
   if (!latest.updated || !latest.stations?.length) return;
-  const t = Math.floor(Date.parse(latest.updated) / 1000);
-  if (state.history.rows.some(r => r[0] === t)) return;
+  // Ключ — начало получасового слота (21:00, 21:30…): повторный запуск в том же слоте перезапишет запись.
+  const t = Math.floor(Date.parse(latest.slot || latest.updated) / 1000);
+  if (state.history.lastUpdated === latest.updated) return;   // этот снимок уже сохранён
+  state.history.lastUpdated = latest.updated;
   mergeRecords(state.history, latest.stations.map(s => ({ t, id: s.id, name: s.name, price: s.price, free: s.free })));
   saveHistory(state.history);
 }
