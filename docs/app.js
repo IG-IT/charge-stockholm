@@ -242,7 +242,7 @@ function details() {
   drawChart($('freeChart'), series.map(r => [r.t, r.free]), { step: true, unit: '', digits: 0, zero: true, max: s.total });
   const prices = series.map(r => r.price).filter(p => p != null);
   $('stats').textContent = prices.length
-    ? `Мин. ${fmt(Math.min(...prices))} · Сред. ${fmt(prices.reduce((a, b) => a + b, 0) / prices.length)} · Макс. ${fmt(Math.max(...prices))} kr · ${series.length} замеров`
+    ? `Мин. ${fmt(Math.min(...prices))} · Сред. ${fmt(prices.reduce((a, b) => a + b, 0) / prices.length)} · Макс. ${fmt(Math.max(...prices))} kr · ${series.length} ${plural(series.length, "замер", "замера", "замеров")}`
     : '';
   heatmap(series, s.total);
   renderDataInfo();
