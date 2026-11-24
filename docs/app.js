@@ -505,23 +505,37 @@ async function getJSON(name) {
   return r.json();
 }
 
-async function load() {
-  $('refresh').disabled = true;
+const clock = d => d.toLocaleTimeString('sv-SE', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+
+async function load(manual = false) {
+  const btn = $('refresh');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.classList.add('spin');
+  const started = Date.now();
+  const before = state.latest.updated;
   try {
     state.latest = await getJSON('latest');
     recordSnapshot(state.latest);
     const updated = state.latest.updated;
     const stale = updated && Date.now() - Date.parse(updated) > 90 * 60000;
+    const fresh = manual && before && updated !== before ? ' · ✓ новые данные' : '';
     $('status').textContent = updated
-      ? `Обновлено ${fmtTime(updated)}${stale ? ' · ⚠ данные устарели' : ''}${navigator.onLine ? '' : ' · офлайн'}`
+      ? `Данные от ${fmtTime(updated)} · проверено ${clock(new Date())}${fresh}${stale ? ' · ⚠ данные устарели' : ''}${navigator.onLine ? '' : ' · офлайн'}`
       : 'Первый сбор данных ещё не выполнен';
     render();
   } catch (e) {
     console.warn(e);
-    $('status').textContent = 'Не удалось загрузить данные — проверьте соединение.';
+    $('status').textContent = `Не удалось загрузить данные (${clock(new Date())}) — проверьте соединение.`;
   } finally {
-    $('refresh').disabled = false;
+    // чтобы анимация была заметна даже при мгновенном ответе
+    setTimeout(() => { btn.disabled = false; btn.classList.remove('spin'); }, Math.max(0, 600 - (Date.now() - started)));
   }
+}
+
+/** Проверяет новую версию приложения; новый service worker сразу берёт управление → перезагрузка. */
+function checkAppUpdate() {
+  navigator.serviceWorker?.getRegistration().then(r => r?.update()).catch(() => {});
 }
 
 // ------------------------------------------------------------------ events
@@ -539,7 +553,7 @@ renderDataInfo();
 navigator.storage?.persist?.().catch(() => {});   // просим браузер не удалять данные
   render();
 };
-$('refresh').onclick = load;
+$('refresh').onclick = () => { load(true); checkAppUpdate(); };
 $('exportCsv').onclick = () => exportCsv().catch(e => { $('dataMsg').textContent = 'Не удалось экспортировать: ' + e.message; });
 $('importBtn').onclick = () => $('importCsv').click();
 $('importCsv').onchange = async e => {
@@ -587,13 +601,20 @@ $('loc').onclick = () => {
     alert('Местоположение недоступно. Разрешите доступ в настройках браузера.');
   }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
 };
-window.addEventListener('online', load);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+window.addEventListener('online', () => load());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { load(); checkAppUpdate(); } });
 
 $('favOnly').setAttribute('aria-pressed', state.favOnly);
 state.history = loadHistory();
 renderDataInfo();
 navigator.storage?.persist?.().catch(() => {});   // просим браузер не удалять данные
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloading) { reloading = true; location.reload(); }   // вышла новая версия
+  });
+  navigator.serviceWorker.register('./sw.js').catch(console.warn);
+}
 load();
-setInterval(load, 5 * 60000);
+setInterval(() => load(), 5 * 60000);

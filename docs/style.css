@@ -123,3 +123,7 @@ footer { font-size: 13px; line-height: 1.6; margin-top: 20px; }
   .hero h2 { font-size: 34px; }
   .heat { grid-template-columns: repeat(4, 1fr); }
 }
+
+#refresh:disabled { opacity: 1; cursor: progress; }
+#refresh.spin { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
