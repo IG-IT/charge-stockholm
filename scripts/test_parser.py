@@ -113,16 +113,5 @@ class RealDataTest(unittest.TestCase):
         self.assertEqual(P.parse({}, {}, at("2026-11-24T12:00")), [])
 
 
-class HistoryTest(unittest.TestCase):
-    def test_append_trim_and_new_sites(self):
-        now = at("2026-11-24T12:00")
-        old = {"v": 2, "sites": ["a"], "names": {}, "rows": [[int(now.timestamp()) - 400 * 86400, [1], [1]]]}
-        stations = [{"id": "b", "name": "B", "price": 3.0, "free": 2},
-                    {"id": "a", "name": "A", "price": 4.0, "free": 1}]
-        h = P.update_history(old, stations, now)
-        self.assertEqual(h["sites"], ["a", "b"])
-        self.assertEqual(h["rows"], [[int(now.timestamp()), [4.0, 3.0], [1, 2]]])
-
-
 if __name__ == "__main__":
     unittest.main()

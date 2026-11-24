@@ -5,8 +5,8 @@
   https://api.spirii.com/v2/afir/energy-infrastructure-statuses — статусы точек, обновления тарифов
 
 Результат:
-  docs/data/latest.json  — текущее состояние каждой станции
-  docs/data/history.json — компактная история цен и свободных мест (до 365 дней)
+  docs/data/latest.json — текущий снимок (перезаписывается каждый запуск).
+  История на сервере не хранится: её копит приложение на телефоне (localStorage).
 
 Только стандартная библиотека Python 3.10+.
 """
@@ -30,7 +30,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.getenv("CHARGE_DATA_DIR", ROOT / "docs" / "data"))
 TZ = ZoneInfo("Europe/Stockholm")
 API = "https://api.spirii.com/v2/afir/energy-infrastructure-"
-HISTORY_DAYS = 365
 
 # Сайты Alecta в Spirii называются "Alecta F - <название>".
 # Отслеживаем ровно эти восемь DC-станций (точное совпадение названия).
@@ -304,34 +303,7 @@ def parse(static: dict, dynamic: dict, now: datetime) -> list[dict]:
     return stations
 
 
-# ---------------------------------------------------------------- history
-
-def update_history(history: dict, stations: list[dict], now: datetime) -> dict:
-    """Компактный формат: {"v":2, "sites":[id...], "rows":[[epoch, [цены], [свободно]], ...]}.
-
-    Новые сайты дописываются в конец "sites", поэтому индексы старых строк не меняются.
-    """
-    if not history or history.get("v") != 2:
-        history = {"v": 2, "sites": [], "names": {}, "rows": []}
-    sites = history["sites"]
-    for s in stations:
-        if s["id"] not in sites:
-            sites.append(s["id"])
-        history["names"][s["id"]] = s["name"]
-    by_id = {s["id"]: s for s in stations}
-    prices = [by_id[i]["price"] if i in by_id else None for i in sites]
-    free = [by_id[i]["free"] if i in by_id else None for i in sites]
-    cutoff = int((now - timedelta(days=HISTORY_DAYS)).timestamp())
-    history["rows"] = [r for r in history["rows"] if r[0] >= cutoff]
-    history["rows"].append([int(now.timestamp()), prices, free])
-    return history
-
-
-def load_json(path: Path, default):
-    if not path.exists():
-        return default
-    return json.loads(path.read_text(encoding="utf-8"))  # битый файл -> ошибка, а не тихая потеря истории
-
+# ---------------------------------------------------------------- output
 
 def save_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -358,15 +330,13 @@ def main() -> None:
     if not stations:
         raise RuntimeError("No Alecta sites matched — site naming in Spirii may have changed.")
 
-    history = update_history(load_json(DATA_DIR / "history.json", {}), stations, now)
-    save_json(DATA_DIR / "history.json", history)
     save_json(DATA_DIR / "latest.json", {
         "updated": now.isoformat(),
         "source": "Spirii AFIR",
         "locations": LOCATIONS,
         "stations": stations,
     })
-    print(f"Saved {len(stations)} stations, {len(history['rows'])} history rows")
+    print(f"Saved {len(stations)} stations")
 
 
 if __name__ == "__main__":

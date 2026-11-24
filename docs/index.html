@@ -81,6 +81,22 @@
     <div id="cost" class="cost">—</div>
   </section>
 
+  <section id="data">
+    <h2>Мои данные</h2>
+    <p class="meta">История цен и свободных мест хранится <b>только на этом устройстве</b> и никуда не отправляется.
+      Она записывается, пока приложение открыто (новый снимок раз в 30 минут), поэтому в ней будут пропуски.
+      Установите приложение на экран «Домой»: в Safari без установки iOS может удалить данные сайта через 7 дней без посещений.
+      Делайте экспорт CSV для резервной копии или переноса на другое устройство.</p>
+    <p id="historyInfo"></p>
+    <div class="controls">
+      <button id="exportCsv">⬇ Экспорт CSV</button>
+      <button id="importBtn">⬆ Импорт CSV</button>
+      <input id="importCsv" type="file" accept=".csv,text/csv,text/plain" hidden>
+      <button id="clearHistory">Очистить</button>
+    </div>
+    <p id="dataMsg" class="meta" role="status"></p>
+  </section>
+
   <footer>
     Данные: <a href="https://developer.spirii.com/developers/afir-compliance" target="_blank" rel="noopener">Spirii AFIR API</a>,
     обновление каждые 30 минут. Показана цена разовой зарядки (ad hoc) с НДС; в приложении оператора

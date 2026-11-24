@@ -7,8 +7,7 @@ const $ = id => document.getElementById(id);
 
 const state = {
   latest: { stations: [] },
-  history: null,
-  historyFor: null,           // latest.updated, для которого загружена история
+  history: null,              // локальная история (localStorage), см. loadHistory()
   favorites: new Set(JSON.parse(localStorage.getItem('favorites') || '[]')),
   favOnly: localStorage.getItem('favOnly') === '1',
   days: 1,
@@ -234,6 +233,158 @@ function details() {
     ? `Мин. ${fmt(Math.min(...prices))} · Сред. ${fmt(prices.reduce((a, b) => a + b, 0) / prices.length)} · Макс. ${fmt(Math.max(...prices))} kr · ${series.length} замеров`
     : '';
   heatmap(series, s.total);
+  renderDataInfo();
+}
+
+// ------------------------------------------------------------------ local history (localStorage + CSV)
+// История хранится только на этом устройстве. Формат:
+// {v:2, sites:[id...], names:{id:name}, rows:[[epochSec, [цены по sites], [свободно по sites]], ...]}
+const HISTORY_KEY = 'history', HISTORY_DAYS = 365;
+const CSV_HEADER = ['time_utc', 'time_stockholm', 'station_id', 'station', 'price_sek_per_kwh', 'free_spots'];
+
+const emptyHistory = () => ({ v: 2, sites: [], names: {}, rows: [] });
+
+function loadHistory() {
+  try {
+    const h = JSON.parse(localStorage.getItem(HISTORY_KEY));
+    if (h && h.v === 2 && Array.isArray(h.rows) && Array.isArray(h.sites)) return h;
+  } catch (e) { console.warn(e); }
+  return emptyHistory();
+}
+
+function saveHistory(h) {
+  const cut = Date.now() / 1000 - HISTORY_DAYS * 86400;
+  h.rows = h.rows.filter(r => r[0] >= cut).sort((a, b) => a[0] - b[0]);
+  for (;;) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+      return true;
+    } catch (e) {                               // нет места — удаляем самые старые 10%
+      if (h.rows.length < 10) { console.warn(e); return false; }
+      h.rows.splice(0, Math.ceil(h.rows.length / 10));
+    }
+  }
+}
+
+/** records: [{t, id, name, price, free}]. Та же станция в то же время перезаписывается. Возвращает число новых. */
+function mergeRecords(h, records) {
+  const byTime = new Map(h.rows.map(r => [r[0], r]));
+  let added = 0;
+  for (const rec of records) {
+    let i = h.sites.indexOf(rec.id);
+    if (i < 0) i = h.sites.push(rec.id) - 1;
+    if (rec.name) h.names[rec.id] = rec.name;
+    let row = byTime.get(rec.t);
+    if (!row) { row = [rec.t, [], []]; byTime.set(rec.t, row); h.rows.push(row); }
+    if (row[1][i] == null && row[2][i] == null) added++;
+    row[1][i] = rec.price;
+    row[2][i] = rec.free;
+  }
+  return added;
+}
+
+/** Сохраняет текущий снимок, если его ещё нет (снимок меняется раз в 30 минут). */
+function recordSnapshot(latest) {
+  if (!latest.updated || !latest.stations?.length) return;
+  const t = Math.floor(Date.parse(latest.updated) / 1000);
+  if (state.history.rows.some(r => r[0] === t)) return;
+  mergeRecords(state.history, latest.stations.map(s => ({ t, id: s.id, name: s.name, price: s.price, free: s.free })));
+  saveHistory(state.history);
+}
+
+const csvCell = v => {
+  v = v == null ? '' : String(v);
+  return /[",;\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+};
+
+function historyToCsv(h) {
+  const lines = [CSV_HEADER.join(',')];
+  for (const [t, prices, free] of h.rows) {
+    h.sites.forEach((id, i) => {
+      if (prices[i] == null && free[i] == null) return;
+      const d = new Date(t * 1000);
+      lines.push([d.toISOString(), fmtTime(d), id, h.names[id] || id, prices[i], free[i]].map(csvCell).join(','));
+    });
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+/** CSV-парсер с поддержкой кавычек; разделитель , или ; */
+function parseCsv(text) {
+  text = text.replace(/^\uFEFF/, '');
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else cell += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',' || c === ';') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim()));
+}
+
+function importCsv(text) {
+  const [header, ...rows] = parseCsv(text);
+  const names = (header || []).map(x => x.trim().toLowerCase());
+  const col = n => names.indexOf(n);
+  const iT = col('time_utc'), iId = col('station_id'), iName = col('station'), iP = col('price_sek_per_kwh'), iF = col('free_spots');
+  if (iT < 0 || iId < 0) throw new Error('Неверный формат: нужны столбцы time_utc и station_id.');
+  const num = v => {
+    v = (v ?? '').trim().replace(',', '.');
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const records = [];
+  let skipped = 0;
+  for (const r of rows) {
+    const t = Date.parse(r[iT]), id = (r[iId] || '').trim();
+    if (!Number.isFinite(t) || !id) { skipped++; continue; }
+    records.push({
+      t: Math.floor(t / 1000), id,
+      name: iName >= 0 ? (r[iName] || '').trim() : '',
+      price: iP >= 0 ? num(r[iP]) : null,
+      free: iF >= 0 ? num(r[iF]) : null,
+    });
+  }
+  const added = mergeRecords(state.history, records);
+  saveHistory(state.history);
+  return { added, total: records.length, skipped };
+}
+
+async function exportCsv() {
+  const name = `charge-stockholm-${new Date().toISOString().slice(0, 10)}.csv`;
+  const file = new File(['\uFEFF' + historyToCsv(state.history)], name, { type: 'text/csv' });
+  if (navigator.canShare?.({ files: [file] })) {   // iPhone: меню «Поделиться» → «Сохранить в Файлы»
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = node('a');
+  a.href = URL.createObjectURL(file);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+const plural = (n, one, few, many) =>
+  n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
+
+function renderDataInfo() {
+  const h = state.history, rows = h.rows;
+  const kb = Math.round((localStorage.getItem(HISTORY_KEY) || '').length / 1024);
+  $('historyInfo').textContent = rows.length
+    ? `${rows.length} ${plural(rows.length, 'снимок', 'снимка', 'снимков')} · ${fmtTime(rows[0][0] * 1000)} — ${fmtTime(rows.at(-1)[0] * 1000)} · ~${kb} КБ`
+    : 'История пока пуста.';
 }
 
 function historySeries(id, days) {
@@ -265,7 +416,7 @@ function heatmap(series, total) {
 function drawChart(el, points, opt) {
   const data = points.filter(p => p[1] != null);
   el.replaceChildren();
-  if (data.length < 1) { el.append(node('div', 'История пока не накоплена — данные появляются каждые 30 минут.', 'empty')); return; }
+  if (data.length < 1) { el.append(node('div', 'История пока не накоплена. Она копится на этом устройстве, пока приложение открыто.', 'empty')); return; }
   const W = 340, H = 140, L = 34, R = 6, T = 8, B = 20;
   const t0 = data[0][0], t1 = data.at(-1)[0];
   let lo = Math.min(...data.map(p => p[1])), hi = Math.max(...data.map(p => p[1]));
@@ -333,10 +484,7 @@ async function load() {
   $('refresh').disabled = true;
   try {
     state.latest = await getJSON('latest');
-    if (state.historyFor !== state.latest.updated) {
-      state.history = await getJSON('history').catch(() => null);
-      state.historyFor = state.latest.updated;
-    }
+    recordSnapshot(state.latest);
     const updated = state.latest.updated;
     const stale = updated && Date.now() - Date.parse(updated) > 90 * 60000;
     $('status').textContent = updated
@@ -361,9 +509,33 @@ $('favOnly').onclick = () => {
   state.favOnly = !state.favOnly;
   localStorage.setItem('favOnly', state.favOnly ? '1' : '0');
   $('favOnly').setAttribute('aria-pressed', state.favOnly);
+state.history = loadHistory();
+renderDataInfo();
+navigator.storage?.persist?.().catch(() => {});   // просим браузер не удалять данные
   render();
 };
 $('refresh').onclick = load;
+$('exportCsv').onclick = () => exportCsv().catch(e => { $('dataMsg').textContent = 'Не удалось экспортировать: ' + e.message; });
+$('importBtn').onclick = () => $('importCsv').click();
+$('importCsv').onchange = async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const r = importCsv(await file.text());
+    $('dataMsg').textContent = `Импортировано: ${r.added} новых записей из ${r.total}` + (r.skipped ? `, пропущено ${r.skipped} строк` : '') + '.';
+    render();
+  } catch (err) {
+    $('dataMsg').textContent = err.message;
+  }
+};
+$('clearHistory').onclick = () => {
+  if (!confirm('Удалить всю историю на этом устройстве? Сначала можно сделать экспорт CSV.')) return;
+  state.history = emptyHistory();
+  saveHistory(state.history);
+  $('dataMsg').textContent = 'История удалена.';
+  render();
+};
 $('sort').onchange = render;
 $('station').onchange = details;
 $('calcStation').onchange = calc;
@@ -385,6 +557,9 @@ window.addEventListener('online', load);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 
 $('favOnly').setAttribute('aria-pressed', state.favOnly);
+state.history = loadHistory();
+renderDataInfo();
+navigator.storage?.persist?.().catch(() => {});   // просим браузер не удалять данные
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
 load();
 setInterval(load, 5 * 60000);

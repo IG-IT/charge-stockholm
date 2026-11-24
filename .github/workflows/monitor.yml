@@ -9,7 +9,7 @@ on:
     paths: ['docs/**', 'scripts/**', '.github/workflows/**']
 
 permissions:
-  contents: write   # push в ветку data
+  contents: read
   pages: write
   id-token: write
 
@@ -34,44 +34,14 @@ jobs:
       - name: Tests
         run: python -m unittest discover -s scripts
 
-      # История хранится в ветке `data` (один коммит, перезаписывается),
-      # чтобы main не раздувался от 48 коммитов в сутки.
-      - name: Restore history from data branch
-        run: |
-          set +e
-          git ls-remote --exit-code --heads origin data > /dev/null
-          code=$?
-          set -e
-          if [ "$code" = "0" ]; then
-            git fetch --depth=1 origin data
-            git show FETCH_HEAD:history.json > docs/data/history.json
-            echo "History restored: $(wc -c < docs/data/history.json) bytes"
-          elif [ "$code" = "2" ]; then
-            echo "No data branch yet — starting fresh history"
-          else
-            echo "Cannot reach remote (exit $code) — refusing to overwrite history"
-            exit 1
-          fi
-
       - name: Fetch prices
         run: python scripts/parser.py
         env:
           SPIRII_CUSTOMER_IDS: ${{ vars.SPIRII_CUSTOMER_IDS }}
           SPIRII_CPO_ID: ${{ vars.SPIRII_CPO_ID }}
 
-      - name: Save history to data branch
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd docs/data
-          git init -q -b data
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add latest.json history.json
-          git commit -q -m "Data $(date -u +%FT%TZ)"
-          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
-          rm -rf .git
-
+      # На сайт публикуется только текущий снимок docs/data/latest.json.
+      # История копится на телефоне пользователя (localStorage), сервер её не хранит.
       - uses: actions/configure-pages@v6
 
       - uses: actions/upload-pages-artifact@v5
