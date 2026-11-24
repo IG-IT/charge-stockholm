@@ -1,0 +1,8 @@
+# Данные генерируются в CI и хранятся в ветке `data`
+docs/data/*.json
+docs/data/*.tmp
+__pycache__/
+*.pyc
+.idea/
+.venv/
+.DS_Store

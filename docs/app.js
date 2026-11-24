@@ -1,0 +1,398 @@
+'use strict';
+
+// ------------------------------------------------------------------ state
+const TZ = 'Europe/Stockholm';
+const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const $ = id => document.getElementById(id);
+
+const state = {
+  latest: { stations: [] },
+  history: null,
+  historyFor: null,           // latest.updated, для которого загружена история
+  favorites: new Set(JSON.parse(localStorage.getItem('favorites') || '[]')),
+  favOnly: localStorage.getItem('favOnly') === '1',
+  kind: localStorage.getItem('kind') || 'all',
+  days: 1,
+  position: null,
+};
+
+// ------------------------------------------------------------------ format
+const fmt = v => v == null ? '—' : v.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtTime = t => new Date(t).toLocaleString('sv-SE', { timeZone: TZ, dateStyle: 'short', timeStyle: 'short' });
+const range = (a, b) => `${a.slice(0, 2)}–${b === '00:00' ? '24' : b.slice(0, 2)}`;
+
+function node(tag, text, cls) {
+  const n = document.createElement(tag);
+  if (text != null) n.textContent = text;
+  if (cls) n.className = cls;
+  return n;
+}
+
+// ------------------------------------------------------------------ tariff (зеркало parser.py)
+const partsFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TZ, hour: '2-digit', minute: '2-digit', weekday: 'long', hourCycle: 'h23',
+});
+
+function stockholm(date) {
+  const p = Object.fromEntries(partsFmt.formatToParts(date).map(x => [x.type, x.value]));
+  return { hhmm: `${p.hour}:${p.minute}`, hour: Number(p.hour), day: WEEKDAYS.indexOf(p.weekday.toLowerCase()) };
+}
+
+function inWindow(w, local) {
+  const t = local.hhmm, { from, to } = w;
+  let inside, day = local.day;
+  if (from === to) inside = true;
+  else if (from < to || to === '00:00') inside = from <= t && (to === '00:00' || t < to);
+  else { inside = t >= from || t < to; if (t < to) day = (day + 6) % 7; }
+  return inside && (!w.days || w.days.includes(WEEKDAYS[day]));
+}
+
+function priceAt(tariff, date) {
+  if (!tariff) return null;
+  const local = stockholm(date);
+  const hits = tariff.periods.filter(w => inWindow(w, local)).map(w => w.price);
+  return hits.length ? Math.min(...hits) : tariff.default;
+}
+
+/** Цены на каждый час текущих суток (по Стокгольму, середина часа). */
+function hourlyPrices(tariff) {
+  const now = new Date(), cur = stockholm(now).hour;
+  return Array.from({ length: 24 }, (_, h) => priceAt(tariff, new Date(now.getTime() + ((h - cur) * 60 + 30 - now.getMinutes()) * 60000)));
+}
+
+function tariffSummary(t) {
+  if (!t) return 'Тариф недоступен';
+  const groups = new Map();
+  for (const p of t.periods) {
+    const key = p.price + '|' + (p.days || []).join(',');
+    if (!groups.has(key)) groups.set(key, { price: p.price, days: p.days, ranges: [] });
+    groups.get(key).ranges.push(range(p.from, p.to));
+  }
+  const parts = [...groups.values()]
+    .filter(g => g.price !== t.default)
+    .map(g => `${fmt(g.price)} kr ${g.ranges.join(', ')}${g.days ? ' (' + g.days.map(d => d.slice(0, 2)).join(',') + ')' : ''}`);
+  if (!parts.length) return t.default != null ? 'Круглосуточно одна цена' : '';
+  return parts.join(' · ') + (t.default != null ? ` · иначе ${fmt(t.default)} kr` : '');
+}
+
+function feeText(f) {
+  const unit = { pricePerMinute: 'kr/мин', pricePerHour: 'kr/ч', pricePerKWh: 'kr/кВт·ч' }[f.type] || `kr (${f.type})`;
+  let s = `+${fmt(f.value)} ${unit}`;
+  if (f.afterMinutes != null) s += ` после ${f.afterMinutes} мин`;
+  if (f.windows?.length) s += ` (${f.windows.map(w => range(w.from, w.to)).join(', ')})`;
+  return s;
+}
+
+// ------------------------------------------------------------------ helpers
+function distanceKm(s) {
+  if (!state.position || s.lat == null) return null;
+  const [lat1, lon1] = state.position, rad = Math.PI / 180;
+  const a = Math.sin((s.lat - lat1) * rad / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(s.lat * rad) * Math.sin((s.lon - lon1) * rad / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(a));
+}
+
+function routeUrl(s) {
+  const dest = s.lat != null ? `${s.lat},${s.lon}` : encodeURIComponent(`${s.name} Alecta laddstation`);
+  return `https://www.google.com/maps/dir/?api=1&destination=${dest}` + (state.position ? `&origin=${state.position.join(',')}` : '');
+}
+
+function availability(s) {
+  if (s.free == null) return { cls: 'none', text: 'статус неизвестен' };
+  const broken = (s.statuses?.outOfOrder || 0) + (s.statuses?.inoperative || 0);
+  const cls = s.free === 0 ? 'bad' : s.free <= Math.max(1, s.total / 4) ? 'warn' : 'ok';
+  return { cls, text: `${s.free}/${s.total} свободно` + (broken ? ` · ${broken} не работает` : '') };
+}
+
+function visibleStations() {
+  return state.latest.stations.filter(s =>
+    (state.kind === 'all' || s.kind === state.kind) && (!state.favOnly || state.favorites.has(s.id)));
+}
+
+// ------------------------------------------------------------------ render: list
+function render() {
+  const all = state.latest.stations;
+  const known = all.filter(s => s.price != null).sort((a, b) => a.price - b.price);
+  $('best').textContent = known.length ? `${fmt(known[0].price)} kr/кВт·ч` : 'Нет данных';
+  $('bestName').textContent = known.length
+    ? known.filter(s => s.price === known[0].price).map(s => s.name).join(', ')
+    : 'Ожидается первый успешный сбор данных';
+  const night = all.map(s => ({ s, p: Math.min(...hourlyPrices(s.tariff).filter(x => x != null)) }))
+    .filter(x => isFinite(x.p)).sort((a, b) => a.p - b.p)[0];
+  $('bestNight').textContent = night && known.length && night.p < known[0].price
+    ? `Минимум за сутки: ${fmt(night.p)} kr — ${night.s.name}` : '';
+
+  const sortKey = $('sort').value;
+  const rows = visibleStations().sort((a, b) => {
+    if (sortKey === 'price') return (a.price ?? Infinity) - (b.price ?? Infinity);
+    if (sortKey === 'distance') return (distanceKm(a) ?? Infinity) - (distanceKm(b) ?? Infinity);
+    return (b[sortKey] ?? -1) - (a[sortKey] ?? -1);
+  });
+
+  const list = $('stations');
+  list.replaceChildren();
+  if (!rows.length) list.append(node('p', state.favOnly ? 'В избранном пока ничего нет — нажмите ☆ у станции.' : 'Нет станций.', 'meta'));
+  for (const s of rows) list.append(stationCard(s));
+
+  fillSelect($('station'), all);
+  fillSelect($('calcStation'), all);
+  details();
+}
+
+function stationCard(s) {
+  const card = node('article', null, 'station');
+  const main = node('div', null, 'station-main');
+  const side = node('div', null, 'station-side');
+
+  const title = node('strong', s.name);
+  main.append(title);
+
+  const meta = node('div', null, 'meta');
+  meta.append(node('span', s.kind, 'tag'), `${s.kw ?? '—'} кВт · `);
+  const av = availability(s);
+  meta.append(node('span', null, 'dot ' + av.cls), av.text);
+  const d = distanceKm(s);
+  if (d != null) meta.append(` · ${d < 10 ? d.toFixed(1) : Math.round(d)} км`);
+  main.append(meta);
+
+  main.append(node('div', tariffSummary(s.tariff), 'meta'));
+  if (s.tariff?.fees?.length) main.append(node('div', s.tariff.fees.map(feeText).join(' · '), 'meta'));
+
+  const links = node('div', null, 'links');
+  const route = node('a', 'Маршрут');
+  route.href = routeUrl(s); route.target = '_blank'; route.rel = 'noopener';
+  const more = node('a', 'Подробнее');
+  more.href = '#details';
+  more.onclick = () => { $('station').value = s.id; details(); };
+  links.append(route, more);
+  main.append(links);
+
+  const price = node('div', null, 'price');
+  price.append(fmt(s.price) + (s.priceMax != null ? '–' + fmt(s.priceMax) : ''), node('small', ' kr'));
+  const fav = node('button', state.favorites.has(s.id) ? '★' : '☆', 'fav');
+  fav.setAttribute('aria-label', (state.favorites.has(s.id) ? 'Убрать из избранного ' : 'В избранное ') + s.name);
+  fav.onclick = () => {
+    state.favorites.has(s.id) ? state.favorites.delete(s.id) : state.favorites.add(s.id);
+    localStorage.setItem('favorites', JSON.stringify([...state.favorites]));
+    render();
+  };
+  side.append(fav, price);
+
+  card.append(main, side);
+  return card;
+}
+
+function fillSelect(select, stations) {
+  const old = select.value;
+  select.replaceChildren(...stations.map(s => {
+    const o = node('option', `${s.name} · ${fmt(s.price)} kr`);
+    o.value = s.id;
+    return o;
+  }));
+  if (old && stations.some(s => s.id === old)) select.value = old;
+  else {
+    const fav = stations.find(s => state.favorites.has(s.id));
+    if (fav) select.value = fav.id;
+  }
+}
+
+// ------------------------------------------------------------------ render: details
+function selected() {
+  return state.latest.stations.find(s => s.id === $('station').value);
+}
+
+function priceColor(p, min, max) {
+  if (p == null) return 'var(--line)';
+  const r = max > min ? (p - min) / (max - min) : 0;
+  return r < 0.34 ? 'var(--cheap)' : r < 0.67 ? 'var(--mid)' : 'var(--dear)';
+}
+
+function details() {
+  const s = selected();
+  calc();
+  if (!s) return;
+
+  // тариф на сегодня
+  const hours = hourlyPrices(s.tariff), valid = hours.filter(p => p != null);
+  const min = Math.min(...valid), max = Math.max(...valid), cur = stockholm(new Date()).hour;
+  $('schedule').replaceChildren(...hours.map((p, h) => {
+    const bar = node('div', null, h === cur ? 'now' : '');
+    bar.style.height = p == null ? '4px' : `${40 + 60 * (max > min ? (p - min) / (max - min) : 0.5)}%`;
+    bar.style.background = priceColor(p, min, max);
+    bar.title = `${String(h).padStart(2, '0')}:00 — ${fmt(p)} kr/кВт·ч`;
+    return bar;
+  }));
+  $('fees').textContent = tariffSummary(s.tariff) +
+    (s.tariff?.fees?.length ? '. Доп. сборы: ' + s.tariff.fees.map(feeText).join('; ') : '') +
+    (s.tariffVariants > 1 ? `. Внимание: у точек станции ${s.tariffVariants} разных тарифа.` : '');
+
+  // история
+  const series = historySeries(s.id, state.days);
+  drawChart($('chart'), series.map(r => [r.t, r.price]), { step: true, unit: 'kr', digits: 2 });
+  drawChart($('freeChart'), series.map(r => [r.t, r.free]), { step: true, unit: '', digits: 0, zero: true, max: s.total });
+  const prices = series.map(r => r.price).filter(p => p != null);
+  $('stats').textContent = prices.length
+    ? `Мин. ${fmt(Math.min(...prices))} · Сред. ${fmt(prices.reduce((a, b) => a + b, 0) / prices.length)} · Макс. ${fmt(Math.max(...prices))} kr · ${series.length} замеров`
+    : '';
+  heatmap(series, s.total);
+}
+
+function historySeries(id, days) {
+  const h = state.history;
+  if (!h || h.v !== 2) return [];
+  const i = h.sites.indexOf(id), cut = Date.now() / 1000 - days * 86400;
+  if (i < 0) return [];
+  return h.rows.filter(r => r[0] >= cut).map(r => ({ t: r[0] * 1000, price: r[1][i] ?? null, free: r[2][i] ?? null }));
+}
+
+function heatmap(series, total) {
+  const bins = Array.from({ length: 24 }, () => ({ p: [], f: [] }));
+  for (const r of series) {
+    const b = bins[stockholm(new Date(r.t)).hour];
+    if (r.price != null) b.p.push(r.price);
+    if (r.free != null) b.f.push(r.free);
+  }
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  $('heat').replaceChildren(...bins.map((b, h) => {
+    const cell = node('div', null, 'cell'), share = total && b.f.length ? avg(b.f) / total : null;
+    cell.append(node('b', String(h).padStart(2, '0') + ':00'), fmt(avg(b.p)), node('br'),
+      share == null ? '—' : `${Math.round(share * 100)}% своб.`);
+    if (share != null) cell.style.background = `color-mix(in srgb, var(--ok) ${Math.round(share * 45)}%, var(--bg))`;
+    return cell;
+  }));
+}
+
+/** Простой SVG-график. points: [[timeMs, value|null], ...] */
+function drawChart(el, points, opt) {
+  const data = points.filter(p => p[1] != null);
+  el.replaceChildren();
+  if (data.length < 1) { el.append(node('div', 'История пока не накоплена — данные появляются каждые 30 минут.', 'empty')); return; }
+  const W = 340, H = 140, L = 34, R = 6, T = 8, B = 20;
+  const t0 = data[0][0], t1 = data.at(-1)[0];
+  let lo = Math.min(...data.map(p => p[1])), hi = Math.max(...data.map(p => p[1]));
+  if (opt.zero) lo = 0;
+  if (opt.max != null) hi = Math.max(hi, opt.max);
+  if (hi === lo) { hi += opt.digits ? 0.5 : 1; lo = Math.max(0, lo - (opt.digits ? 0.5 : 1)); }
+  const x = t => L + (W - L - R) * (t1 > t0 ? (t - t0) / (t1 - t0) : 1);
+  const y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const add = (tag, attrs, text) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text;
+    svg.append(e);
+    return e;
+  };
+  for (const v of [lo, (lo + hi) / 2, hi]) {
+    add('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' });
+    add('text', { x: L - 4, y: y(v) + 3, 'text-anchor': 'end', class: 'axis' }, v.toFixed(opt.digits));
+  }
+  add('text', { x: L, y: H - 4, class: 'axis' }, fmtTime(t0));
+  add('text', { x: W - R, y: H - 4, 'text-anchor': 'end', class: 'axis' }, fmtTime(t1));
+  let d = '';
+  data.forEach(([t, v], k) => {
+    d += k === 0 ? `M${x(t)},${y(v)}` : (opt.step ? `H${x(t)}V${y(v)}` : `L${x(t)},${y(v)}`);
+  });
+  if (data.length === 1) add('circle', { cx: x(t0), cy: y(data[0][1]), r: 3, fill: 'var(--accent)' });
+  add('path', { d, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linejoin': 'round' });
+  el.append(svg);
+}
+
+// ------------------------------------------------------------------ calculator
+function calc() {
+  const s = state.latest.stations.find(x => x.id === $('calcStation').value);
+  const kwh = Number($('energy').value);
+  const out = $('cost');
+  out.replaceChildren();
+  if (!s || s.price == null || !(kwh >= 0)) { out.textContent = 'Нет тарифа для расчёта'; return; }
+  const hours = hourlyPrices(s.tariff).filter(p => p != null);
+  const cheapest = Math.min(...hours);
+  out.append('Сейчас: ', node('strong', `${fmt(s.price * kwh)} kr`), ` (${fmt(s.price)} kr/кВт·ч)`);
+  if (cheapest < s.price) {
+    out.append(node('br'), `В самый дешёвый час: ${fmt(cheapest * kwh)} kr — экономия ${fmt((s.price - cheapest) * kwh)} kr`);
+  }
+  const minuteFee = s.tariff?.fees?.find(f => f.type === 'pricePerMinute');
+  if (minuteFee) {
+    out.append(node('br'), node('span', `⚠ ${feeText(minuteFee)} — не забудьте отключиться вовремя.`, 'meta'));
+  }
+  if (s.kw) {
+    const minutes = Math.round(kwh / (s.kind === 'AC' ? Math.min(s.kw, 11) : s.kw * 0.6) * 60);
+    out.append(node('br'), node('span', `Примерное время: ~${minutes} мин (${s.kind === 'AC' ? 'бортовое ЗУ 11 кВт' : 'средняя мощность ~60% от пиковой'}).`, 'meta'));
+  }
+}
+
+// ------------------------------------------------------------------ data loading
+async function getJSON(name) {
+  const r = await fetch(`data/${name}.json`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+  return r.json();
+}
+
+async function load() {
+  $('refresh').disabled = true;
+  try {
+    state.latest = await getJSON('latest');
+    if (state.historyFor !== state.latest.updated) {
+      state.history = await getJSON('history').catch(() => null);
+      state.historyFor = state.latest.updated;
+    }
+    const updated = state.latest.updated;
+    const stale = updated && Date.now() - Date.parse(updated) > 90 * 60000;
+    $('status').textContent = updated
+      ? `Обновлено ${fmtTime(updated)}${stale ? ' · ⚠ данные устарели' : ''}${navigator.onLine ? '' : ' · офлайн'}`
+      : 'Первый сбор данных ещё не выполнен';
+    render();
+  } catch (e) {
+    console.warn(e);
+    $('status').textContent = 'Не удалось загрузить данные — проверьте соединение.';
+  } finally {
+    $('refresh').disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------ events
+function setKind(kind) {
+  state.kind = kind;
+  localStorage.setItem('kind', kind);
+  document.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('active', b.dataset.kind === kind));
+}
+
+document.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { setKind(b.dataset.kind); render(); });
+document.querySelectorAll('[data-days]').forEach(b => b.onclick = () => {
+  state.days = Number(b.dataset.days);
+  document.querySelectorAll('[data-days]').forEach(x => x.classList.toggle('active', x === b));
+  details();
+});
+$('favOnly').onclick = () => {
+  state.favOnly = !state.favOnly;
+  localStorage.setItem('favOnly', state.favOnly ? '1' : '0');
+  $('favOnly').setAttribute('aria-pressed', state.favOnly);
+  render();
+};
+$('refresh').onclick = load;
+$('sort').onchange = render;
+$('station').onchange = details;
+$('calcStation').onchange = calc;
+$('energy').oninput = calc;
+$('loc').onclick = () => {
+  if (!navigator.geolocation) return alert('Геолокация не поддерживается');
+  $('loc').textContent = '📍 Определяю…';
+  navigator.geolocation.getCurrentPosition(p => {
+    state.position = [p.coords.latitude, p.coords.longitude];
+    $('loc').textContent = '📍 Рядом со мной';
+    $('sort').value = 'distance';
+    render();
+  }, () => {
+    $('loc').textContent = '📍 Рядом со мной';
+    alert('Местоположение недоступно. Разрешите доступ в настройках браузера.');
+  }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+};
+window.addEventListener('online', load);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+
+setKind(state.kind);
+$('favOnly').setAttribute('aria-pressed', state.favOnly);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+load();
+setInterval(load, 5 * 60000);

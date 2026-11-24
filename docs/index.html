@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#123c32">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Charge STHLM">
+  <meta name="description" content="Цены и свободные места на зарядных станциях Alecta в Стокгольме">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <title>Charge Stockholm</title>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <small>ALECTA · STOCKHOLM</small>
+      <h1>⚡ Charge Stockholm</h1>
+    </div>
+    <button id="refresh" class="icon" aria-label="Обновить">↻</button>
+  </header>
+
+  <p id="status" role="status">Загрузка…</p>
+
+  <section class="hero">
+    <small>Самая дешёвая зарядка сейчас</small>
+    <h2 id="best">—</h2>
+    <div id="bestName"></div>
+    <div id="bestNight" class="hero-note"></div>
+  </section>
+
+  <div class="controls">
+    <div class="segmented" role="group" aria-label="Тип зарядки">
+      <button data-kind="all" class="active">Все</button>
+      <button data-kind="AC">AC</button>
+      <button data-kind="DC">DC</button>
+    </div>
+    <select id="sort" aria-label="Сортировка">
+      <option value="price">По цене</option>
+      <option value="free">По свободным местам</option>
+      <option value="kw">По мощности</option>
+      <option value="distance">По расстоянию</option>
+    </select>
+    <button id="favOnly" aria-pressed="false">★ Избранное</button>
+    <button id="loc">📍 Рядом со мной</button>
+  </div>
+
+  <div id="stations"></div>
+
+  <section id="details">
+    <h2>Станция подробно</h2>
+    <select id="station" aria-label="Станция"></select>
+    <h3>Тариф по часам сегодня</h3>
+    <div id="schedule" class="schedule"></div>
+    <div class="schedule-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+    <p id="fees" class="meta"></p>
+
+    <h3>История цены</h3>
+    <div class="segmented" role="group" aria-label="Период" id="period">
+      <button data-days="1" class="active">24 ч</button>
+      <button data-days="7">7 дн</button>
+      <button data-days="30">30 дн</button>
+      <button data-days="365">Год</button>
+    </div>
+    <div id="chart" class="chart"></div>
+    <p id="stats" class="meta"></p>
+
+    <h3>Свободные места</h3>
+    <div id="freeChart" class="chart"></div>
+
+    <h3>Средние значения по часам</h3>
+    <p class="meta">Цена и доля свободных мест за выбранный период, время Стокгольма.</p>
+    <div id="heat" class="heat"></div>
+  </section>
+
+  <section>
+    <h2>Калькулятор</h2>
+    <div class="calc">
+      <label>Энергия, кВт·ч <input id="energy" type="number" min="0" max="200" step="1" value="40" inputmode="decimal"></label>
+      <label>Станция <select id="calcStation"></select></label>
+    </div>
+    <div id="cost" class="cost">—</div>
+  </section>
+
+  <footer>
+    Данные: <a href="https://developer.spirii.com/developers/afir-compliance" target="_blank" rel="noopener">Spirii AFIR API</a>,
+    обновление каждые 30 минут. Показана цена разовой зарядки (ad hoc) с НДС; в приложении оператора
+    или по подписке цена может отличаться. Проверяйте тариф на месте перед оплатой.
+    <br>iPhone: Safari → «Поделиться» → «На экран „Домой“».
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
