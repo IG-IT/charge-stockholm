@@ -1,5 +1,5 @@
 // Network-first: всегда пробуем свежие данные, при отсутствии сети отдаём кэш.
-const CACHE = 'charge-stockholm-v8';
+const CACHE = 'charge-stockholm-v9';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.json',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 

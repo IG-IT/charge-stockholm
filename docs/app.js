@@ -113,21 +113,25 @@ function visibleStations() {
 }
 
 // ------------------------------------------------------------------ render: list
+/** Текущая цена считается на устройстве по расписанию тарифа: снимок мог быть сделан до смены тарифа. */
+const livePrice = s => s.tariff ? priceAt(s.tariff, new Date()) : s.price;
+
 function render() {
+  for (const s of state.latest.stations) s.now = livePrice(s);
   const all = state.latest.stations;
-  const known = all.filter(s => s.price != null).sort((a, b) => a.price - b.price);
-  $('best').textContent = known.length ? `${fmt(known[0].price)} kr/кВт·ч` : 'Нет данных';
+  const known = all.filter(s => s.now != null).sort((a, b) => a.now - b.now);
+  $('best').textContent = known.length ? `${fmt(known[0].now)} kr/кВт·ч` : 'Нет данных';
   $('bestName').textContent = known.length
-    ? known.filter(s => s.price === known[0].price).map(s => s.name).join(', ')
+    ? known.filter(s => s.now === known[0].now).map(s => s.name).join(', ')
     : 'Ожидается первый успешный сбор данных';
   const night = all.map(s => ({ s, p: Math.min(...hourlyPrices(s.tariff).filter(x => x != null)) }))
     .filter(x => isFinite(x.p)).sort((a, b) => a.p - b.p)[0];
-  $('bestNight').textContent = night && known.length && night.p < known[0].price
+  $('bestNight').textContent = night && known.length && night.p < known[0].now
     ? `Минимум за сутки: ${fmt(night.p)} kr — ${night.s.name}` : '';
 
   const sortKey = $('sort').value;
   const rows = visibleStations().sort((a, b) => {
-    if (sortKey === 'price') return (a.price ?? Infinity) - (b.price ?? Infinity);
+    if (sortKey === 'price') return (a.now ?? Infinity) - (b.now ?? Infinity);
     if (sortKey === 'distance') return (distanceKm(a) ?? Infinity) - (distanceKm(b) ?? Infinity);
     return (b[sortKey] ?? -1) - (a[sortKey] ?? -1);
   });
@@ -171,7 +175,7 @@ function stationCard(s) {
   main.append(links);
 
   const price = node('div', null, 'price');
-  price.append(fmt(s.price) + (s.priceMax != null ? '–' + fmt(s.priceMax) : ''), node('small', ' kr'));
+  price.append(fmt(s.now), node('small', ' kr'));
   const fav = node('button', state.favorites.has(s.id) ? '★' : '☆', 'fav');
   fav.setAttribute('aria-label', (state.favorites.has(s.id) ? 'Убрать из избранного ' : 'В избранное ') + s.name);
   fav.onclick = () => {
@@ -180,8 +184,8 @@ function stationCard(s) {
     render();
   };
   side.append(fav, price);
-  if (s.price != null && chargeKwh() > 0) {
-    side.append(node('div', `≈ ${Math.round(s.price * chargeKwh())} kr за ${state.car.from}→${state.car.to}%`, 'trip'));
+  if (s.now != null && chargeKwh() > 0) {
+    side.append(node('div', `≈ ${Math.round(s.now * chargeKwh())} kr за ${state.car.from}→${state.car.to}%`, 'trip'));
   }
 
   card.append(main, side);
@@ -191,7 +195,7 @@ function stationCard(s) {
 function fillSelect(select, stations) {
   const old = select.value;
   select.replaceChildren(...stations.map(s => {
-    const o = node('option', `${s.name} · ${fmt(s.price)} kr`);
+    const o = node('option', `${s.name} · ${fmt(s.now)} kr`);
     o.value = s.id;
     return o;
   }));
@@ -477,14 +481,14 @@ function calc() {
   const kwh = chargeKwh();
   const out = $('cost');
   out.replaceChildren();
-  if (!s || s.price == null) { out.textContent = 'Нет тарифа для расчёта'; return; }
+  if (!s || s.now == null) { out.textContent = 'Нет тарифа для расчёта'; return; }
   if (!(kwh > 0)) { out.textContent = 'Укажите заряд «до» больше, чем «с».'; return; }
   out.append(`Нужно ~${fmt(kwh)} кВт·ч (${state.car.from} → ${state.car.to} %)`, node('br'));
   const hours = hourlyPrices(s.tariff).filter(p => p != null);
   const cheapest = Math.min(...hours);
-  out.append('Сейчас: ', node('strong', `${fmt(s.price * kwh)} kr`), ` (${fmt(s.price)} kr/кВт·ч)`);
-  if (cheapest < s.price) {
-    out.append(node('br'), `В самый дешёвый час: ${fmt(cheapest * kwh)} kr — экономия ${fmt((s.price - cheapest) * kwh)} kr`);
+  out.append('Сейчас: ', node('strong', `${fmt(s.now * kwh)} kr`), ` (${fmt(s.now)} kr/кВт·ч)`);
+  if (cheapest < s.now) {
+    out.append(node('br'), `В самый дешёвый час: ${fmt(cheapest * kwh)} kr — экономия ${fmt((s.now - cheapest) * kwh)} kr`);
   }
   const minuteFee = s.tariff?.fees?.find(f => f.type === 'pricePerMinute');
   if (minuteFee) {
@@ -618,3 +622,5 @@ if ('serviceWorker' in navigator) {
 }
 load();
 setInterval(() => load(), 5 * 60000);
+// Каждую минуту: если наступил другой тариф (например, ночной с 22:00), перерисовать.
+setInterval(() => { if (state.latest.stations.some(s => s.now !== livePrice(s))) render(); }, 60000);
