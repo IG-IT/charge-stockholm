@@ -75,8 +75,12 @@
 
   <section>
     <h2>Калькулятор</h2>
+    <p class="meta">Параметры вашей машины сохраняются на устройстве. На карточках станций показана цена такой зарядки.</p>
     <div class="calc">
-      <label>Энергия, кВт·ч <input id="energy" type="number" min="0" max="200" step="1" value="40" inputmode="decimal"></label>
+      <label>Батарея, кВт·ч <input id="battery" type="number" min="10" max="200" step="1" inputmode="decimal"></label>
+      <label>С, % <input id="socFrom" type="number" min="0" max="100" step="1" inputmode="numeric"></label>
+      <label>До, % <input id="socTo" type="number" min="0" max="100" step="1" inputmode="numeric"></label>
+      <label>Макс. мощность машины, кВт <input id="carKw" type="number" min="10" max="500" step="1" inputmode="numeric"></label>
       <label>Станция <select id="calcStation"></select></label>
     </div>
     <div id="cost" class="cost">—</div>

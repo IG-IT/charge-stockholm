@@ -111,7 +111,8 @@ button[aria-pressed="true"], .segmented button.active { background: var(--accent
 
 .calc { display: flex; flex-wrap: wrap; gap: 12px; }
 .calc label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--muted); }
-.calc input { width: 120px; }
+.calc input { width: 96px; }
+.trip { font-size: 12px; color: var(--muted); white-space: nowrap; text-align: right; }
 .cost { margin-top: 14px; font-size: 15px; line-height: 1.7; }
 .cost strong { font-size: 24px; }
 

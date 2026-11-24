@@ -12,7 +12,12 @@ const state = {
   favOnly: localStorage.getItem('favOnly') === '1',
   days: 1,
   position: null,
+  // Типичная зарядка: батарея ~100 кВт·ч, 30 → 90 %, пик машины ~130 кВт.
+  car: { battery: 100, from: 30, to: 90, kw: 130, ...JSON.parse(localStorage.getItem('car') || '{}') },
 };
+
+/** Сколько кВт·ч нужно для обычной зарядки. */
+const chargeKwh = () => Math.max(0, state.car.battery * (state.car.to - state.car.from) / 100);
 
 // ------------------------------------------------------------------ format
 const fmt = v => v == null ? '—' : v.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -175,6 +180,9 @@ function stationCard(s) {
     render();
   };
   side.append(fav, price);
+  if (s.price != null && chargeKwh() > 0) {
+    side.append(node('div', `≈ ${Math.round(s.price * chargeKwh())} kr за ${state.car.from}→${state.car.to}%`, 'trip'));
+  }
 
   card.append(main, side);
   return card;
@@ -454,10 +462,12 @@ function drawChart(el, points, opt) {
 // ------------------------------------------------------------------ calculator
 function calc() {
   const s = state.latest.stations.find(x => x.id === $('calcStation').value);
-  const kwh = Number($('energy').value);
+  const kwh = chargeKwh();
   const out = $('cost');
   out.replaceChildren();
-  if (!s || s.price == null || !(kwh >= 0)) { out.textContent = 'Нет тарифа для расчёта'; return; }
+  if (!s || s.price == null) { out.textContent = 'Нет тарифа для расчёта'; return; }
+  if (!(kwh > 0)) { out.textContent = 'Укажите заряд «до» больше, чем «с».'; return; }
+  out.append(`Нужно ~${fmt(kwh)} кВт·ч (${state.car.from} → ${state.car.to} %)`, node('br'));
   const hours = hourlyPrices(s.tariff).filter(p => p != null);
   const cheapest = Math.min(...hours);
   out.append('Сейчас: ', node('strong', `${fmt(s.price * kwh)} kr`), ` (${fmt(s.price)} kr/кВт·ч)`);
@@ -469,9 +479,10 @@ function calc() {
     out.append(node('br'), node('span', `⚠ ${feeText(minuteFee)} — не забудьте отключиться вовремя.`, 'meta'));
   }
   if (s.kw) {
-    const avg = s.kind === 'AC' ? Math.min(s.kw, 11) : Math.min(s.kw, 150) * 0.65;
+    // Средняя мощность DC-сессии ~65 % от пика (машина снижает мощность после ~50–60 %).
+    const avg = s.kind === 'AC' ? Math.min(s.kw, 11) : Math.min(s.kw, state.car.kw) * 0.65;
     const minutes = Math.round(kwh / avg * 60);
-    out.append(node('br'), node('span', `Примерное время: ~${minutes} мин (${s.kind === 'AC' ? 'бортовое ЗУ 11 кВт' : `в среднем ~${Math.round(avg)} кВт, зависит от машины`}).`, 'meta'));
+    out.append(node('br'), node('span', `Примерное время: ~${minutes} мин (в среднем ~${Math.round(avg)} кВт).`, 'meta'));
   }
 }
 
@@ -541,7 +552,16 @@ $('clearHistory').onclick = () => {
 $('sort').onchange = render;
 $('station').onchange = details;
 $('calcStation').onchange = calc;
-$('energy').oninput = calc;
+for (const [id, key] of [['battery', 'battery'], ['socFrom', 'from'], ['socTo', 'to'], ['carKw', 'kw']]) {
+  $(id).value = state.car[key];
+  $(id).oninput = () => {
+    const v = Number($(id).value);
+    if (!Number.isFinite(v) || $(id).value === '') return;
+    state.car[key] = key === 'from' || key === 'to' ? Math.min(100, Math.max(0, v)) : Math.max(1, v);
+    localStorage.setItem('car', JSON.stringify(state.car));
+    render();
+  };
+}
 $('loc').onclick = () => {
   if (!navigator.geolocation) return alert('Геолокация не поддерживается');
   $('loc').textContent = '📍 Определяю…';
